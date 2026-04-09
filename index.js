@@ -1,17 +1,18 @@
 const WebSocket = require("ws");
-const OpenAI = require("openai");
+const OpenAI = require("openai").default;
 
-// Configurar OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-const channel = "CIAC"; 
-const nick = "CIAC"; 
+const channel = "CIAC";
+const nick = "CIAC";
+
+// 🧠 Memoria por usuario
+const memoriaUsuarios = {};
 
 const ws = new WebSocket("wss://hack.chat/chat-ws");
 
-// Conexión
 ws.on("open", () => {
   console.log("✅ Conectado a hack.chat");
 
@@ -22,48 +23,69 @@ ws.on("open", () => {
   }));
 });
 
-// Escuchar mensajes
 ws.on("message", async (data) => {
   const msg = JSON.parse(data);
 
   if (msg.cmd === "chat") {
-    console.log(`${msg.nick}: ${msg.text}`);
-
-    // Evitar que el bot se responda a sí mismo
     if (msg.nick === nick) return;
 
-    const texto = msg.text.toLowerCase();
+    const texto = msg.text;
+    const textoLower = texto.toLowerCase();
 
-    // 👉 Palabra clave: "ciac "
-    if (!texto.startsWith("ciac ")) return;
+    console.log(`${msg.nick}: ${texto}`);
 
-    const pregunta = msg.text.slice(5).trim(); // quita "ciac "
+    // 👤 Crear memoria si no existe
+    if (!memoriaUsuarios[msg.nick]) {
+      memoriaUsuarios[msg.nick] = [];
+    }
 
+    // 🎯 Solo responde si dice "ciac"
+    if (!textoLower.startsWith("ciac ")) return;
+
+    const pregunta = texto.slice(5).trim();
     if (!pregunta) return;
 
     try {
+      // 🧠 Guardar mensaje del usuario
+      memoriaUsuarios[msg.nick].push({
+        role: "user",
+        content: pregunta
+      });
+
+      // Limitar memoria (últimos 6 mensajes)
+      memoriaUsuarios[msg.nick] = memoriaUsuarios[msg.nick].slice(-6);
+
       const respuesta = await openai.chat.completions.create({
         model: "gpt-4.1-mini",
         messages: [
-          { role: "system", content: "Eres un asistente divertido, breve y útil." },
-          { role: "user", content: pregunta }
+          {
+            role: "system",
+            content: `Eres un asistente inteligente, amigable y breve. 
+            Estás en un chat grupal. Responde directamente al usuario ${msg.nick}.`
+          },
+          ...memoriaUsuarios[msg.nick]
         ]
       });
 
       const textoRespuesta = respuesta.choices[0].message.content;
 
+      // 🧠 Guardar respuesta del bot
+      memoriaUsuarios[msg.nick].push({
+        role: "assistant",
+        content: textoRespuesta
+      });
+
       ws.send(JSON.stringify({
         cmd: "chat",
-        text: textoRespuesta.slice(0, 200)
+        text: `@${msg.nick} ${textoRespuesta.slice(0, 200)}`
       }));
 
     } catch (err) {
-      console.log("❌ Error con OpenAI:", err);
+      console.log("❌ Error:", err);
     }
   }
 });
 
-// Manejo de errores
 ws.on("error", (err) => {
   console.log("❌ Error WebSocket:", err);
 });
