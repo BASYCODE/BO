@@ -1,5 +1,4 @@
 const WebSocket = require("ws");
-const fetch = require("node-fetch"); // 👈 IMPORTANTE para Node < 18
 
 const channel = "CIAC";
 const nick = "CIAC";
