@@ -1,7 +1,7 @@
 const WebSocket = require("ws");
 
 const channel = "CIAC";
-const nick = "CIAC BOT";
+const nick = "CIACBOT";
 
 const ws = new WebSocket("wss://hack.chat/chat-ws");
 
