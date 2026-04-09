@@ -1,10 +1,20 @@
 const WebSocket = require("ws");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
+// ================= CONFIG =================
 const channel = "CIAC";
 const nick = "CIAC";
 
+// API Google Gemini
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+const model = genAI.getGenerativeModel({
+  model: "gemini-1.5-flash"
+});
+
+// memoria por usuario
 const memoriaUsuarios = {};
 
+// ================= HACK.CHAT =================
 const ws = new WebSocket("wss://hack.chat/chat-ws");
 
 ws.on("open", () => {
@@ -17,6 +27,7 @@ ws.on("open", () => {
   }));
 });
 
+// ================= MENSAJES =================
 ws.on("message", async (data) => {
   let msg;
 
@@ -31,59 +42,47 @@ ws.on("message", async (data) => {
 
   const texto = msg.text || "";
 
+  // activar solo si mencionan CIAC
   if (!texto.toLowerCase().includes("ciac")) return;
 
   const pregunta = texto.replace(/ciac/gi, "").trim();
   if (!pregunta) return;
 
+  console.log(`📨 ${msg.nick}: ${pregunta}`);
+
+  // crear memoria si no existe
   if (!memoriaUsuarios[msg.nick]) {
     memoriaUsuarios[msg.nick] = [];
   }
 
-  memoriaUsuarios[msg.nick].push({
-    role: "user",
-    content: pregunta
-  });
-
-  memoriaUsuarios[msg.nick] =
-    memoriaUsuarios[msg.nick].slice(-6);
-
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "meta-llama/llama-3-8b-instruct",
-        messages: [
-          {
-            role: "system",
-            content: `Eres un asistente breve y útil. Responde a ${msg.nick}.`
-          },
-          ...memoriaUsuarios[msg.nick]
-        ]
-      })
+    // construir chat con historial
+    const chat = model.startChat({
+      history: memoriaUsuarios[msg.nick]
     });
 
-    const dataRes = await response.json();
+    const result = await chat.sendMessage(pregunta);
+    const respuesta = result.response.text();
 
-    console.log("🔎 OpenRouter response:", dataRes);
-
-    const textoRespuesta =
-      dataRes?.choices?.[0]?.message?.content ||
-      dataRes?.error?.message ||
-      "No pude responder 😅";
+    // guardar memoria estilo Gemini
+    memoriaUsuarios[msg.nick].push({
+      role: "user",
+      parts: [{ text: pregunta }]
+    });
 
     memoriaUsuarios[msg.nick].push({
-      role: "assistant",
-      content: textoRespuesta
+      role: "model",
+      parts: [{ text: respuesta }]
     });
 
+    // limitar memoria
+    memoriaUsuarios[msg.nick] =
+      memoriaUsuarios[msg.nick].slice(-10);
+
+    // enviar respuesta
     ws.send(JSON.stringify({
       cmd: "chat",
-      text: `@${msg.nick} ${textoRespuesta.slice(0, 200)}`
+      text: `@${msg.nick} ${respuesta.slice(0, 200)}`
     }));
 
   } catch (err) {
@@ -91,7 +90,12 @@ ws.on("message", async (data) => {
 
     ws.send(JSON.stringify({
       cmd: "chat",
-      text: `@${msg.nick} ⚠️ Error con la IA`
+      text: `@${msg.nick} ⚠️ Error con Gemini`
     }));
   }
+});
+
+// ================= ERROR WS =================
+ws.on("error", (err) => {
+  console.log("❌ WebSocket error:", err);
 });
