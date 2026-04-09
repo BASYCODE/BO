@@ -5,7 +5,6 @@ const nick = "CIAC";
 
 const API_KEY = process.env.GOOGLE_API_KEY;
 
-// memoria por usuario
 const memoriaUsuarios = {};
 
 const ws = new WebSocket("wss://hack.chat/chat-ws");
@@ -47,19 +46,11 @@ async function preguntarGemini(pregunta) {
 
     const data = await response.json();
 
-    console.log("🔎 Gemini RAW:", JSON.stringify(data, null, 2));
-
     if (data.candidates && data.candidates.length > 0) {
-      const parts = data.candidates[0].content.parts;
-
-      if (parts && parts.length > 0) {
-        return parts.map(p => p.text).join(" ").trim();
-      }
-    }
-
-    if (data.error) {
-      console.log("❌ Gemini error:", data.error);
-      return "La IA no respondió 😅";
+      return data.candidates[0].content.parts
+        .map(p => p.text)
+        .join(" ")
+        .trim();
     }
 
     return "No pude responder 😅";
@@ -67,6 +58,35 @@ async function preguntarGemini(pregunta) {
   } catch (err) {
     console.log("❌ Error Gemini:", err);
     return "Error con la IA 😅";
+  }
+}
+
+// ================= UTILIDADES =================
+
+// hora real Colombia
+function obtenerHora() {
+  return new Date().toLocaleString("es-CO", {
+    timeZone: "America/Bogota",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric"
+  });
+}
+
+// fecha real
+function obtenerFecha() {
+  return new Date().toLocaleDateString("es-CO", {
+    timeZone: "America/Bogota"
+  });
+}
+
+// cálculo simple seguro
+function calcular(expr) {
+  try {
+    if (!/^[0-9+\-*/().\s]+$/.test(expr)) return null;
+    return Function(`"use strict"; return (${expr})`)();
+  } catch {
+    return null;
   }
 }
 
@@ -85,7 +105,6 @@ ws.on("message", async (data) => {
 
   const texto = msg.text || "";
 
-  // activar solo si dicen "ciac"
   if (!texto.toLowerCase().includes("ciac")) return;
 
   const pregunta = texto.replace(/ciac/gi, "").trim();
@@ -93,7 +112,41 @@ ws.on("message", async (data) => {
 
   console.log(`📨 ${msg.nick}: ${pregunta}`);
 
-  // memoria simple
+  const lower = pregunta.toLowerCase();
+
+  // ================= RESPUESTAS REALES =================
+
+  // hora
+  if (lower.includes("hora")) {
+    ws.send(JSON.stringify({
+      cmd: "chat",
+      text: `@${msg.nick} Son las ${obtenerHora()} en Colombia 🇨🇴`
+    }));
+    return;
+  }
+
+  // fecha
+  if (lower.includes("fecha")) {
+    ws.send(JSON.stringify({
+      cmd: "chat",
+      text: `@${msg.nick} Hoy es ${obtenerFecha()} 📅`
+    }));
+    return;
+  }
+
+  // cálculo
+  if (lower.startsWith("calc") || lower.includes("+") || lower.includes("-") || lower.includes("*") || lower.includes("/")) {
+    const resultado = calcular(pregunta.replace("calc", ""));
+    if (resultado !== null) {
+      ws.send(JSON.stringify({
+        cmd: "chat",
+        text: `@${msg.nick} Resultado: ${resultado} 🧮`
+      }));
+      return;
+    }
+  }
+
+  // ================= MEMORIA =================
   if (!memoriaUsuarios[msg.nick]) {
     memoriaUsuarios[msg.nick] = [];
   }
@@ -103,6 +156,7 @@ ws.on("message", async (data) => {
 
   const contexto = memoriaUsuarios[msg.nick].join("\n");
 
+  // ================= IA =================
   const respuesta = await preguntarGemini(
     `Usuario: ${msg.nick}\nContexto:\n${contexto}\n\nPregunta: ${pregunta}`
   );
