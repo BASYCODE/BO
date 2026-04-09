@@ -8,7 +8,7 @@ const nick = "CIAC";
 // API Google Gemini
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-flash"
+  model: "gemini-1.5-flash-latest"
 });
 
 // memoria por usuario
