@@ -1,14 +1,9 @@
 const WebSocket = require("ws");
-const OpenAI = require("openai").default;
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
 
 const channel = "CIAC";
-const nick = "Bot_CIAC";
+const nick = "CIAC";
 
-// 🧠 Memoria por usuario
+// 🧠 memoria por usuario
 const memoriaUsuarios = {};
 
 const ws = new WebSocket("wss://hack.chat/chat-ws");
@@ -30,47 +25,52 @@ ws.on("message", async (data) => {
     if (msg.nick === nick) return;
 
     const texto = msg.text;
-    const textoLower = texto.toLowerCase();
-
     console.log(`${msg.nick}: ${texto}`);
 
-    // 👤 Crear memoria si no existe
+    // crear memoria
     if (!memoriaUsuarios[msg.nick]) {
       memoriaUsuarios[msg.nick] = [];
     }
 
-    // 🔍 Detectar "ciac" en cualquier parte (palabra completa)
-    if (!/\bciac\b/i.test(texto)) return;
+    // detectar "ciac" en cualquier parte
+    if (!texto.toLowerCase().includes("ciac")) return;
 
-    // ✂️ Quitar "ciac" del mensaje
     const pregunta = texto.replace(/ciac/gi, "").trim();
     if (!pregunta) return;
 
     try {
-      // 🧠 Guardar mensaje del usuario
+      // guardar mensaje usuario
       memoriaUsuarios[msg.nick].push({
         role: "user",
         content: pregunta
       });
 
-      // Limitar memoria (últimos 6 mensajes)
       memoriaUsuarios[msg.nick] = memoriaUsuarios[msg.nick].slice(-6);
 
-      const respuesta = await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
-        messages: [
-          {
-            role: "system",
-            content: `Eres un asistente inteligente, breve y amigable en un chat grupal. 
-            Responde directamente al usuario ${msg.nick}.`
-          },
-          ...memoriaUsuarios[msg.nick]
-        ]
+      // 🔥 petición a OpenRouter
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "mistralai/mistral-7b-instruct",
+          messages: [
+            {
+              role: "system",
+              content: `Eres un asistente inteligente, breve y amigable. Responde a ${msg.nick}.`
+            },
+            ...memoriaUsuarios[msg.nick]
+          ]
+        })
       });
 
-      const textoRespuesta = respuesta.choices[0].message.content;
+      const dataRes = await response.json();
 
-      // 🧠 Guardar respuesta del bot
+      const textoRespuesta = dataRes.choices?.[0]?.message?.content || "No pude responder 😅";
+
+      // guardar respuesta
       memoriaUsuarios[msg.nick].push({
         role: "assistant",
         content: textoRespuesta
@@ -82,7 +82,12 @@ ws.on("message", async (data) => {
       }));
 
     } catch (err) {
-      console.log("❌ Error con OpenAI:", err);
+      console.log("❌ Error:", err);
+
+      ws.send(JSON.stringify({
+        cmd: "chat",
+        text: `@${msg.nick} ⚠️ Error con la IA`
+      }));
     }
   }
 });
