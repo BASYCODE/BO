@@ -1,7 +1,7 @@
 const WebSocket = require("ws");
 
-const channel = "prueba123"; // cambia el nombre del canal
-const nick = "MiBot"; // cambia el nombre del bot
+const channel = "CIAC"; // cambia el nombre del canal
+const nick = "CIAC BOT"; // cambia el nombre del bot
 
 const ws = new WebSocket("wss://hack.chat/chat-ws");
 
