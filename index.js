@@ -1,4 +1,5 @@
 const WebSocket = require("ws");
+const fetch = require("node-fetch"); // 👈 IMPORTANTE para Node < 18
 
 const channel = "CIAC";
 const nick = "CIAC";
@@ -25,7 +26,7 @@ ws.on("open", () => {
 async function preguntarGemini(pregunta) {
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${API_KEY}`,
       {
         method: "POST",
         headers: {
@@ -45,19 +46,19 @@ async function preguntarGemini(pregunta) {
 
     console.log("🔎 Gemini RAW:", JSON.stringify(data, null, 2));
 
-    // ✔ leer respuesta correctamente
+    // ✔ respuesta correcta
     if (data.candidates && data.candidates.length > 0) {
       const parts = data.candidates[0].content.parts;
 
       if (parts && parts.length > 0) {
-        return parts.map(p => p.text).join(" ");
+        return parts.map(p => p.text).join(" ").trim();
       }
     }
 
     // error de API
     if (data.error) {
       console.log("❌ Gemini error:", data.error);
-      return "Error con la IA 😅";
+      return "La IA no respondió 😅";
     }
 
     return "No pude responder 😅";
