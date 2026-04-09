@@ -4,6 +4,7 @@ const channel = "CIAC";
 const nick = "CIAC";
 
 const API_KEY = process.env.GOOGLE_API_KEY;
+const GNEWS_API_KEY = process.env.GNEWS_API_KEY;
 
 const memoriaUsuarios = {};
 
@@ -39,7 +40,11 @@ async function preguntarGemini(pregunta) {
                 }
               ]
             }
-          ]
+          ],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 200
+          }
         })
       }
     );
@@ -48,7 +53,6 @@ async function preguntarGemini(pregunta) {
 
     console.log("🔎 Gemini RAW:", JSON.stringify(data, null, 2));
 
-    // ✅ forma principal
     if (data.candidates?.length > 0) {
       const parts = data.candidates[0]?.content?.parts;
       if (parts?.length > 0) {
@@ -56,12 +60,6 @@ async function preguntarGemini(pregunta) {
       }
     }
 
-    // ✅ fallback extra
-    if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
-      return data.candidates[0].content.parts[0].text;
-    }
-
-    // ❌ error API
     if (data.error) {
       console.log("❌ Gemini error:", data.error);
       return "La IA falló 😅";
@@ -75,9 +73,27 @@ async function preguntarGemini(pregunta) {
   }
 }
 
-// ================= UTILIDADES =================
+// ================= NOTICIAS =================
+async function obtenerNoticias() {
+  try {
+    const res = await fetch(
+      `https://gnews.io/api/v4/top-headlines?lang=es&country=co&max=3&apikey=${GNEWS_API_KEY}`
+    );
 
-// hora real Colombia
+    const data = await res.json();
+
+    if (!data.articles) return "No encontré noticias 😅";
+
+    return data.articles
+      .map(n => `📰 ${n.title}`)
+      .join("\n");
+
+  } catch {
+    return "Error obteniendo noticias 😅";
+  }
+}
+
+// ================= UTILIDADES =================
 function obtenerHora() {
   return new Date().toLocaleString("es-CO", {
     timeZone: "America/Bogota",
@@ -87,14 +103,12 @@ function obtenerHora() {
   });
 }
 
-// fecha real
 function obtenerFecha() {
   return new Date().toLocaleDateString("es-CO", {
     timeZone: "America/Bogota"
   });
 }
 
-// cálculo seguro
 function calcular(expr) {
   try {
     if (!/^[0-9+\-*/().\s]+$/.test(expr)) return null;
@@ -164,6 +178,18 @@ ws.on("message", async (data) => {
       }));
       return;
     }
+  }
+
+  // 📰 NOTICIAS ACTUALES
+  if (lower.includes("noticias")) {
+    const noticias = await obtenerNoticias();
+
+    ws.send(JSON.stringify({
+      cmd: "chat",
+      text: `@${msg.nick}\n${noticias}`
+    }));
+
+    return;
   }
 
   // ================= MEMORIA =================
