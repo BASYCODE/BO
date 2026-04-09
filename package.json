@@ -6,7 +6,6 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "ws": "^8.18.0",
-    "node-fetch": "^2.6.7"
+    "ws": "^8.18.0"
   }
 }
