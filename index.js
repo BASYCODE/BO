@@ -6,7 +6,7 @@ const openai = new OpenAI({
 });
 
 const channel = "CIAC";
-const nick = "CIAC";
+const nick = "Bot_CIAC";
 
 // 🧠 Memoria por usuario
 const memoriaUsuarios = {};
@@ -39,10 +39,11 @@ ws.on("message", async (data) => {
       memoriaUsuarios[msg.nick] = [];
     }
 
-    // 🎯 Solo responde si dice "ciac"
-    if (!textoLower.startsWith("ciac ")) return;
+    // 🔍 Detectar "ciac" en cualquier parte (palabra completa)
+    if (!/\bciac\b/i.test(texto)) return;
 
-    const pregunta = texto.slice(5).trim();
+    // ✂️ Quitar "ciac" del mensaje
+    const pregunta = texto.replace(/ciac/gi, "").trim();
     if (!pregunta) return;
 
     try {
@@ -60,8 +61,8 @@ ws.on("message", async (data) => {
         messages: [
           {
             role: "system",
-            content: `Eres un asistente inteligente, amigable y breve. 
-            Estás en un chat grupal. Responde directamente al usuario ${msg.nick}.`
+            content: `Eres un asistente inteligente, breve y amigable en un chat grupal. 
+            Responde directamente al usuario ${msg.nick}.`
           },
           ...memoriaUsuarios[msg.nick]
         ]
@@ -81,7 +82,7 @@ ws.on("message", async (data) => {
       }));
 
     } catch (err) {
-      console.log("❌ Error:", err);
+      console.log("❌ Error con OpenAI:", err);
     }
   }
 });
