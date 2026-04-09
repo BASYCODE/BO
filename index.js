@@ -1,22 +1,16 @@
 const WebSocket = require("ws");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// ================= CONFIG =================
 const channel = "CIAC";
 const nick = "CIAC";
 
-// API Google Gemini
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-flash-latest"
-});
+const API_KEY = process.env.GOOGLE_API_KEY;
 
 // memoria por usuario
 const memoriaUsuarios = {};
 
-// ================= HACK.CHAT =================
 const ws = new WebSocket("wss://hack.chat/chat-ws");
 
+// ================= CONECTAR =================
 ws.on("open", () => {
   console.log("✅ Conectado a hack.chat");
 
@@ -27,13 +21,46 @@ ws.on("open", () => {
   }));
 });
 
+// ================= FUNCIÓN GEMINI =================
+async function preguntarGemini(pregunta) {
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: pregunta }
+              ]
+            }
+          ]
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text
+      || "No pude responder 😅";
+
+  } catch (err) {
+    console.log("❌ Error Gemini:", err);
+    return "Error con la IA 😅";
+  }
+}
+
 // ================= MENSAJES =================
 ws.on("message", async (data) => {
   let msg;
 
   try {
     msg = JSON.parse(data.toString());
-  } catch (e) {
+  } catch {
     return;
   }
 
@@ -50,52 +77,28 @@ ws.on("message", async (data) => {
 
   console.log(`📨 ${msg.nick}: ${pregunta}`);
 
-  // crear memoria si no existe
+  // memoria básica
   if (!memoriaUsuarios[msg.nick]) {
     memoriaUsuarios[msg.nick] = [];
   }
 
-  try {
-    // construir chat con historial
-    const chat = model.startChat({
-      history: memoriaUsuarios[msg.nick]
-    });
+  memoriaUsuarios[msg.nick].push(pregunta);
+  memoriaUsuarios[msg.nick] = memoriaUsuarios[msg.nick].slice(-5);
 
-    const result = await chat.sendMessage(pregunta);
-    const respuesta = result.response.text();
+  // contexto simple
+  const contexto = memoriaUsuarios[msg.nick].join("\n");
 
-    // guardar memoria estilo Gemini
-    memoriaUsuarios[msg.nick].push({
-      role: "user",
-      parts: [{ text: pregunta }]
-    });
+  const respuesta = await preguntarGemini(
+    `Usuario: ${msg.nick}\nContexto:\n${contexto}\n\nPregunta: ${pregunta}`
+  );
 
-    memoriaUsuarios[msg.nick].push({
-      role: "model",
-      parts: [{ text: respuesta }]
-    });
-
-    // limitar memoria
-    memoriaUsuarios[msg.nick] =
-      memoriaUsuarios[msg.nick].slice(-10);
-
-    // enviar respuesta
-    ws.send(JSON.stringify({
-      cmd: "chat",
-      text: `@${msg.nick} ${respuesta.slice(0, 200)}`
-    }));
-
-  } catch (err) {
-    console.log("❌ Error IA:", err);
-
-    ws.send(JSON.stringify({
-      cmd: "chat",
-      text: `@${msg.nick} ⚠️ Error con Gemini`
-    }));
-  }
+  ws.send(JSON.stringify({
+    cmd: "chat",
+    text: `@${msg.nick} ${respuesta.slice(0, 200)}`
+  }));
 });
 
-// ================= ERROR WS =================
+// ================= ERROR =================
 ws.on("error", (err) => {
   console.log("❌ WebSocket error:", err);
 });
