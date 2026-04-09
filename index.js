@@ -19,6 +19,11 @@ ws.on("open", () => {
 });
 
 ws.on("message", async (data) => {
+  console.log("📩 RAW:", data.toString());
+
+  const msg = JSON.parse(data);
+
+  console.log("📨 PARSED:", msg);
   const msg = JSON.parse(data);
 
   if (msg.cmd === "chat") {
