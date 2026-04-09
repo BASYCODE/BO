@@ -1,12 +1,13 @@
 {
   "name": "hackchat-bot",
   "version": "1.0.0",
-  "description": "Bot simple para hack.chat",
+  "description": "Bot con IA",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "ws": "^8.13.0"
+    "ws": "^8.13.0",
+    "openai": "^4.0.0"
   }
 }
