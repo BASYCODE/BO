@@ -35,7 +35,7 @@ async function preguntarGemini(pregunta) {
             {
               parts: [
                 {
-                  text: `Responde como un bot de chat, claro, breve y útil:\n${pregunta}`
+                  text: `Responde claro, breve y útil:\n${pregunta}`
                 }
               ]
             }
@@ -46,11 +46,25 @@ async function preguntarGemini(pregunta) {
 
     const data = await response.json();
 
-    if (data.candidates && data.candidates.length > 0) {
-      return data.candidates[0].content.parts
-        .map(p => p.text)
-        .join(" ")
-        .trim();
+    console.log("🔎 Gemini RAW:", JSON.stringify(data, null, 2));
+
+    // ✅ forma principal
+    if (data.candidates?.length > 0) {
+      const parts = data.candidates[0]?.content?.parts;
+      if (parts?.length > 0) {
+        return parts.map(p => p.text || "").join(" ").trim();
+      }
+    }
+
+    // ✅ fallback extra
+    if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+      return data.candidates[0].content.parts[0].text;
+    }
+
+    // ❌ error API
+    if (data.error) {
+      console.log("❌ Gemini error:", data.error);
+      return "La IA falló 😅";
     }
 
     return "No pude responder 😅";
@@ -80,7 +94,7 @@ function obtenerFecha() {
   });
 }
 
-// cálculo simple seguro
+// cálculo seguro
 function calcular(expr) {
   try {
     if (!/^[0-9+\-*/().\s]+$/.test(expr)) return null;
@@ -135,7 +149,13 @@ ws.on("message", async (data) => {
   }
 
   // cálculo
-  if (lower.startsWith("calc") || lower.includes("+") || lower.includes("-") || lower.includes("*") || lower.includes("/")) {
+  if (
+    lower.startsWith("calc") ||
+    lower.includes("+") ||
+    lower.includes("-") ||
+    lower.includes("*") ||
+    lower.includes("/")
+  ) {
     const resultado = calcular(pregunta.replace("calc", ""));
     if (resultado !== null) {
       ws.send(JSON.stringify({
