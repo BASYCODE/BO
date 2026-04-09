@@ -21,7 +21,7 @@ ws.on("open", () => {
   }));
 });
 
-// ================= FUNCIÓN GEMINI =================
+// ================= GEMINI =================
 async function preguntarGemini(pregunta) {
   try {
     const response = await fetch(
@@ -34,9 +34,7 @@ async function preguntarGemini(pregunta) {
         body: JSON.stringify({
           contents: [
             {
-              parts: [
-                { text: pregunta }
-              ]
+              parts: [{ text: pregunta }]
             }
           ]
         })
@@ -45,8 +43,24 @@ async function preguntarGemini(pregunta) {
 
     const data = await response.json();
 
-    return data?.candidates?.[0]?.content?.parts?.[0]?.text
-      || "No pude responder 😅";
+    console.log("🔎 Gemini RAW:", JSON.stringify(data, null, 2));
+
+    // ✔ leer respuesta correctamente
+    if (data.candidates && data.candidates.length > 0) {
+      const parts = data.candidates[0].content.parts;
+
+      if (parts && parts.length > 0) {
+        return parts.map(p => p.text).join(" ");
+      }
+    }
+
+    // error de API
+    if (data.error) {
+      console.log("❌ Gemini error:", data.error);
+      return "Error con la IA 😅";
+    }
+
+    return "No pude responder 😅";
 
   } catch (err) {
     console.log("❌ Error Gemini:", err);
@@ -69,7 +83,7 @@ ws.on("message", async (data) => {
 
   const texto = msg.text || "";
 
-  // activar solo si mencionan CIAC
+  // activar solo si dicen "ciac"
   if (!texto.toLowerCase().includes("ciac")) return;
 
   const pregunta = texto.replace(/ciac/gi, "").trim();
@@ -77,7 +91,7 @@ ws.on("message", async (data) => {
 
   console.log(`📨 ${msg.nick}: ${pregunta}`);
 
-  // memoria básica
+  // memoria simple
   if (!memoriaUsuarios[msg.nick]) {
     memoriaUsuarios[msg.nick] = [];
   }
@@ -85,7 +99,6 @@ ws.on("message", async (data) => {
   memoriaUsuarios[msg.nick].push(pregunta);
   memoriaUsuarios[msg.nick] = memoriaUsuarios[msg.nick].slice(-5);
 
-  // contexto simple
   const contexto = memoriaUsuarios[msg.nick].join("\n");
 
   const respuesta = await preguntarGemini(
