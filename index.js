@@ -34,7 +34,11 @@ async function preguntarGemini(pregunta) {
         body: JSON.stringify({
           contents: [
             {
-              parts: [{ text: pregunta }]
+              parts: [
+                {
+                  text: `Responde como un bot de chat, claro, breve y útil:\n${pregunta}`
+                }
+              ]
             }
           ]
         })
@@ -45,7 +49,6 @@ async function preguntarGemini(pregunta) {
 
     console.log("🔎 Gemini RAW:", JSON.stringify(data, null, 2));
 
-    // ✔ respuesta correcta
     if (data.candidates && data.candidates.length > 0) {
       const parts = data.candidates[0].content.parts;
 
@@ -54,7 +57,6 @@ async function preguntarGemini(pregunta) {
       }
     }
 
-    // error de API
     if (data.error) {
       console.log("❌ Gemini error:", data.error);
       return "La IA no respondió 😅";
