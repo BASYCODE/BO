@@ -5,8 +5,10 @@ const nick = "CIAC";
 
 const API_KEY = process.env.GOOGLE_API_KEY;
 const GNEWS_API_KEY = process.env.GNEWS_API_KEY;
+const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const memoriaUsuarios = {};
+const cache = {}; // 🔥 cache simple
 
 const ws = new WebSocket("wss://hack.chat/chat-ws");
 
@@ -28,24 +30,17 @@ async function preguntarGemini(pregunta) {
       `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${API_KEY}`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: `Responde claro, breve y útil.
+          contents: [{
+            parts: [{
+              text: `Responde claro, breve y útil.
+Usa la información proporcionada si existe.
 Si no estás seguro, dilo.
-No contradigas al usuario sin estar seguro.
-Usa información reciente si se proporciona.
 
 ${pregunta}`
-                }
-              ]
-            }
-          ],
+            }]
+          }],
           generationConfig: {
             temperature: 0.7,
             maxOutputTokens: 200
@@ -56,55 +51,103 @@ ${pregunta}`
 
     const data = await response.json();
 
-    console.log("🔎 Gemini RAW:", JSON.stringify(data, null, 2));
-
     if (data.candidates?.length > 0) {
-      const parts = data.candidates[0]?.content?.parts;
-      if (parts?.length > 0) {
-        return parts.map(p => p.text || "").join(" ").trim();
-      }
-    }
-
-    if (data.error) {
-      console.log("❌ Gemini error:", data.error);
-      return "La IA falló 😅";
+      return data.candidates[0].content.parts
+        .map(p => p.text || "")
+        .join(" ")
+        .trim();
     }
 
     return "No pude responder 😅";
 
   } catch (err) {
-    console.log("❌ Error Gemini:", err);
+    console.log("❌ Gemini:", err);
     return "Error con la IA 😅";
   }
 }
 
-// ================= NOTICIAS =================
+// ================= CACHE =================
+function getCache(key) {
+  if (!cache[key]) return null;
+  if (Date.now() - cache[key].time > 60000) return null; // 1 min
+  return cache[key].data;
+}
+
+function setCache(key, data) {
+  cache[key] = { data, time: Date.now() };
+}
+
+// ================= APIS =================
+
+// 📰 Noticias
 async function obtenerNoticias() {
+  const cacheKey = "noticias";
+  const cached = getCache(cacheKey);
+  if (cached) return cached;
+
   try {
     const res = await fetch(
       `https://gnews.io/api/v4/top-headlines?lang=es&country=co&max=3&apikey=${GNEWS_API_KEY}`
     );
+    const data = await res.json();
+
+    const noticias = data.articles
+      ?.map(n => `📰 ${n.title}`)
+      .join("\n") || "";
+
+    setCache(cacheKey, noticias);
+    return noticias;
+
+  } catch {
+    return "";
+  }
+}
+
+// 🌐 Búsqueda web
+async function buscarWeb(query) {
+  const cacheKey = "web_" + query;
+  const cached = getCache(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const res = await fetch("https://serper.dev/api/search", {
+      method: "POST",
+      headers: {
+        "X-API-KEY": SERPER_API_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ q: query })
+    });
 
     const data = await res.json();
 
-    if (!data.articles) return "No encontré noticias 😅";
+    const resultados = data.organic
+      ?.slice(0, 3)
+      .map(r => `🌐 ${r.title}`)
+      .join("\n") || "";
 
-    return data.articles
-      .map(n => `📰 ${n.title}`)
-      .join("\n");
+    setCache(cacheKey, resultados);
+    return resultados;
 
   } catch {
-    return "Error obteniendo noticias 😅";
+    return "";
   }
 }
 
 // ================= UTILIDADES =================
+
+function esPreguntaActual(texto) {
+  const claves = [
+    "hoy", "actual", "2026", "noticias",
+    "preso", "murió", "pasó", "última",
+    "venezuela", "maduro"
+  ];
+  return claves.some(p => texto.includes(p));
+}
+
 function obtenerHora() {
-  return new Date().toLocaleString("es-CO", {
-    timeZone: "America/Bogota",
-    hour: "numeric",
-    minute: "numeric",
-    second: "numeric"
+  return new Date().toLocaleTimeString("es-CO", {
+    timeZone: "America/Bogota"
   });
 }
 
@@ -117,7 +160,7 @@ function obtenerFecha() {
 function calcular(expr) {
   try {
     if (!/^[0-9+\-*/().\s]+$/.test(expr)) return null;
-    return Function(`"use strict"; return (${expr})`)();
+    return Function(`return (${expr})`)();
   } catch {
     return null;
   }
@@ -147,18 +190,16 @@ ws.on("message", async (data) => {
 
   const lower = pregunta.toLowerCase();
 
-  // ================= RESPUESTAS REALES =================
-
-  // ⏰ hora
+  // ⏰ Hora
   if (lower.includes("hora")) {
     ws.send(JSON.stringify({
       cmd: "chat",
-      text: `@${msg.nick} Son las ${obtenerHora()} en Colombia 🇨🇴`
+      text: `@${msg.nick} Son las ${obtenerHora()} ⏰`
     }));
     return;
   }
 
-  // 📅 fecha
+  // 📅 Fecha
   if (lower.includes("fecha")) {
     ws.send(JSON.stringify({
       cmd: "chat",
@@ -167,42 +208,40 @@ ws.on("message", async (data) => {
     return;
   }
 
-  // 🧮 cálculo
-  if (
-    lower.startsWith("calc") ||
-    lower.includes("+") ||
-    lower.includes("-") ||
-    lower.includes("*") ||
-    lower.includes("/")
-  ) {
-    const resultado = calcular(pregunta.replace("calc", ""));
-    if (resultado !== null) {
+  // 🧮 Cálculo
+  if (/[+\-*/]/.test(lower)) {
+    const r = calcular(pregunta);
+    if (r !== null) {
       ws.send(JSON.stringify({
         cmd: "chat",
-        text: `@${msg.nick} Resultado: ${resultado} 🧮`
+        text: `@${msg.nick} Resultado: ${r} 🧮`
       }));
       return;
     }
   }
 
-  // 📰 noticias directas
-  if (lower.includes("noticias")) {
+  // 🧠 MEMORIA
+  if (!memoriaUsuarios[msg.nick]) memoriaUsuarios[msg.nick] = [];
+  memoriaUsuarios[msg.nick].push(pregunta);
+  memoriaUsuarios[msg.nick] = memoriaUsuarios[msg.nick].slice(-5);
+
+  const contexto = memoriaUsuarios[msg.nick].join("\n");
+
+  // 🌐 MODO DIOS: búsqueda automática
+  if (esPreguntaActual(lower)) {
     const noticias = await obtenerNoticias();
+    const web = await buscarWeb(pregunta);
 
-    ws.send(JSON.stringify({
-      cmd: "chat",
-      text: `@${msg.nick}\n${noticias}`
-    }));
+    const contextoFull = `
+NOTICIAS:
+${noticias}
 
-    return;
-  }
-
-  // 🌐 TEMAS ACTUALES (Maduro / Venezuela)
-  if (lower.includes("maduro") || lower.includes("venezuela")) {
-    const noticias = await obtenerNoticias();
+WEB:
+${web}
+`;
 
     const respuesta = await preguntarGemini(
-      `Información actual:\n${noticias}\n\nPregunta: ${pregunta}`
+      `${contextoFull}\n\nPregunta: ${pregunta}`
     );
 
     ws.send(JSON.stringify({
@@ -213,19 +252,9 @@ ws.on("message", async (data) => {
     return;
   }
 
-  // ================= MEMORIA =================
-  if (!memoriaUsuarios[msg.nick]) {
-    memoriaUsuarios[msg.nick] = [];
-  }
-
-  memoriaUsuarios[msg.nick].push(pregunta);
-  memoriaUsuarios[msg.nick] = memoriaUsuarios[msg.nick].slice(-5);
-
-  const contexto = memoriaUsuarios[msg.nick].join("\n");
-
-  // ================= IA NORMAL =================
+  // 🤖 IA normal
   const respuesta = await preguntarGemini(
-    `Usuario: ${msg.nick}\nContexto:\n${contexto}\n\nPregunta: ${pregunta}`
+    `Usuario: ${msg.nick}\n${contexto}\nPregunta: ${pregunta}`
   );
 
   ws.send(JSON.stringify({
@@ -236,5 +265,5 @@ ws.on("message", async (data) => {
 
 // ================= ERROR =================
 ws.on("error", (err) => {
-  console.log("❌ WebSocket error:", err);
+  console.log("❌ WebSocket:", err);
 });
