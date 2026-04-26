@@ -8,25 +8,53 @@ const GNEWS_API_KEY = process.env.GNEWS_API_KEY;
 const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const memoriaUsuarios = {};
-const cache = {}; // 🔥 cache simple
+const cache = {};
 
-const ws = new WebSocket("wss://hack.chat/chat-ws");
+// ================= WEBSOCKET CON RECONEXIÓN =================
+let ws;
 
-// ================= CONECTAR =================
-ws.on("open", () => {
-  console.log("✅ Conectado a hack.chat");
+function conectar() {
+  ws = new WebSocket("wss://hack.chat/chat-ws");
 
-  ws.send(JSON.stringify({
-    cmd: "join",
-    channel,
-    nick
-  }));
-});
+  ws.on("open", () => {
+    console.log("✅ Conectado a hack.chat");
+    ws.send(JSON.stringify({ cmd: "join", channel, nick }));
+  });
+
+  ws.on("message", manejarMensaje);
+
+  ws.on("error", (err) => {
+    console.log("❌ WebSocket error:", err.message);
+  });
+
+  ws.on("close", () => {
+    console.log("🔌 Desconectado. Reconectando en 5 segundos...");
+    setTimeout(conectar, 5000);
+  });
+}
+
+conectar();
+
+// ================= FETCH CON TIMEOUT =================
+async function fetchConTimeout(url, opciones = {}, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, { ...opciones, signal: controller.signal });
+    return res;
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("Timeout en la petición");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // ================= GEMINI =================
 async function preguntarGemini(pregunta) {
   try {
-    const response = await fetch(
+    const response = await fetchConTimeout(
       `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${API_KEY}`,
       {
         method: "POST",
@@ -46,7 +74,8 @@ ${pregunta}`
             maxOutputTokens: 200
           }
         })
-      }
+      },
+      8000 // Gemini puede tardar un poco más
     );
 
     const data = await response.json();
@@ -58,23 +87,47 @@ ${pregunta}`
         .trim();
     }
 
-    return "No pude responder 😅";
+    return "No pude generar una respuesta 😅";
 
   } catch (err) {
-    console.log("❌ Gemini:", err);
-    return "Error con la IA 😅";
+    console.log("❌ Gemini:", err.message);
+    return err.message.includes("Timeout")
+      ? "La IA tardó demasiado, intenta de nuevo 😅"
+      : "Error con la IA 😅";
   }
 }
 
 // ================= CACHE =================
+const CACHE_TTL = 60000; // 1 minuto
+const MEMORIA_MAX_USUARIOS = 200;
+const MEMORIA_MAX_MENSAJES = 5;
+
 function getCache(key) {
-  if (!cache[key]) return null;
-  if (Date.now() - cache[key].time > 60000) return null; // 1 min
-  return cache[key].data;
+  const entry = cache[key];
+  if (!entry) return null;
+  if (Date.now() - entry.time > CACHE_TTL) {
+    delete cache[key];
+    return null;
+  }
+  return entry.data;
 }
 
 function setCache(key, data) {
   cache[key] = { data, time: Date.now() };
+}
+
+// ================= MEMORIA CON LÍMITE =================
+function guardarMemoria(nick, pregunta) {
+  // Limitar cantidad de usuarios en memoria
+  const usuarios = Object.keys(memoriaUsuarios);
+  if (!memoriaUsuarios[nick] && usuarios.length >= MEMORIA_MAX_USUARIOS) {
+    // Eliminar el usuario más antiguo
+    delete memoriaUsuarios[usuarios[0]];
+  }
+
+  if (!memoriaUsuarios[nick]) memoriaUsuarios[nick] = [];
+  memoriaUsuarios[nick].push(pregunta);
+  memoriaUsuarios[nick] = memoriaUsuarios[nick].slice(-MEMORIA_MAX_MENSAJES);
 }
 
 // ================= APIS =================
@@ -86,7 +139,7 @@ async function obtenerNoticias() {
   if (cached) return cached;
 
   try {
-    const res = await fetch(
+    const res = await fetchConTimeout(
       `https://gnews.io/api/v4/top-headlines?lang=es&country=co&max=3&apikey=${GNEWS_API_KEY}`
     );
     const data = await res.json();
@@ -98,38 +151,43 @@ async function obtenerNoticias() {
     setCache(cacheKey, noticias);
     return noticias;
 
-  } catch {
+  } catch (err) {
+    console.log("❌ Noticias:", err.message);
     return "";
   }
 }
 
-// 🌐 Búsqueda web
+// 🌐 Búsqueda web (URL corregida)
 async function buscarWeb(query) {
   const cacheKey = "web_" + query;
   const cached = getCache(cacheKey);
   if (cached) return cached;
 
   try {
-    const res = await fetch("https://serper.dev/api/search", {
-      method: "POST",
-      headers: {
-        "X-API-KEY": SERPER_API_KEY,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ q: query })
-    });
+    const res = await fetchConTimeout(
+      "https://google.serper.dev/search", // ✅ URL corregida
+      {
+        method: "POST",
+        headers: {
+          "X-API-KEY": SERPER_API_KEY,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ q: query })
+      }
+    );
 
     const data = await res.json();
 
     const resultados = data.organic
       ?.slice(0, 3)
-      .map(r => `🌐 ${r.title}`)
+      .map(r => `🌐 ${r.title}: ${r.snippet || ""}`)
       .join("\n") || "";
 
     setCache(cacheKey, resultados);
     return resultados;
 
-  } catch {
+  } catch (err) {
+    console.log("❌ Serper:", err.message);
     return "";
   }
 }
@@ -157,17 +215,50 @@ function obtenerFecha() {
   });
 }
 
+// ✅ Calculadora segura con mathjs (instala con: npm install mathjs)
+let math;
+try {
+  math = require("mathjs");
+} catch {
+  math = null;
+  console.warn("⚠️ mathjs no instalado. Cálculos deshabilitados. Ejecuta: npm install mathjs");
+}
+
 function calcular(expr) {
+  if (!math) return null;
   try {
-    if (!/^[0-9+\-*/().\s]+$/.test(expr)) return null;
-    return Function(`return (${expr})`)();
+    // Solo permitir expresiones matemáticas simples
+    if (!/^[0-9+\-*/().\s^%]+$/.test(expr)) return null;
+    const resultado = math.evaluate(expr);
+    if (typeof resultado !== "number") return null;
+    return resultado;
   } catch {
     return null;
   }
 }
 
-// ================= MENSAJES =================
-ws.on("message", async (data) => {
+// ✅ Cortar respuesta sin partir palabras
+function cortarRespuesta(texto, max = 200) {
+  if (texto.length <= max) return texto;
+  const corte = texto.slice(0, max);
+  const ultimoEspacio = corte.lastIndexOf(" ");
+  return (ultimoEspacio > 0 ? corte.slice(0, ultimoEspacio) : corte) + "…";
+}
+
+// ================= ENVIAR MENSAJE =================
+function enviar(nick, texto) {
+  if (ws.readyState !== WebSocket.OPEN) {
+    console.log("⚠️ WebSocket no disponible, mensaje descartado");
+    return;
+  }
+  ws.send(JSON.stringify({
+    cmd: "chat",
+    text: `@${nick} ${texto}`
+  }));
+}
+
+// ================= MANEJAR MENSAJES =================
+async function manejarMensaje(data) {
   let msg;
 
   try {
@@ -180,7 +271,6 @@ ws.on("message", async (data) => {
   if (msg.nick === nick) return;
 
   const texto = msg.text || "";
-
   if (!texto.toLowerCase().includes("ciac")) return;
 
   const pregunta = texto.replace(/ciac/gi, "").trim();
@@ -192,45 +282,35 @@ ws.on("message", async (data) => {
 
   // ⏰ Hora
   if (lower.includes("hora")) {
-    ws.send(JSON.stringify({
-      cmd: "chat",
-      text: `@${msg.nick} Son las ${obtenerHora()} ⏰`
-    }));
+    enviar(msg.nick, `Son las ${obtenerHora()} ⏰`);
     return;
   }
 
   // 📅 Fecha
   if (lower.includes("fecha")) {
-    ws.send(JSON.stringify({
-      cmd: "chat",
-      text: `@${msg.nick} Hoy es ${obtenerFecha()} 📅`
-    }));
+    enviar(msg.nick, `Hoy es ${obtenerFecha()} 📅`);
     return;
   }
 
   // 🧮 Cálculo
-  if (/[+\-*/]/.test(lower)) {
+  if (/[+\-*/^%]/.test(lower)) {
     const r = calcular(pregunta);
     if (r !== null) {
-      ws.send(JSON.stringify({
-        cmd: "chat",
-        text: `@${msg.nick} Resultado: ${r} 🧮`
-      }));
+      enviar(msg.nick, `Resultado: ${r} 🧮`);
       return;
     }
   }
 
-  // 🧠 MEMORIA
-  if (!memoriaUsuarios[msg.nick]) memoriaUsuarios[msg.nick] = [];
-  memoriaUsuarios[msg.nick].push(pregunta);
-  memoriaUsuarios[msg.nick] = memoriaUsuarios[msg.nick].slice(-5);
-
+  // 🧠 Memoria
+  guardarMemoria(msg.nick, pregunta);
   const contexto = memoriaUsuarios[msg.nick].join("\n");
 
-  // 🌐 MODO DIOS: búsqueda automática
+  // 🌐 Modo con búsqueda web + noticias
   if (esPreguntaActual(lower)) {
-    const noticias = await obtenerNoticias();
-    const web = await buscarWeb(pregunta);
+    const [noticias, web] = await Promise.all([
+      obtenerNoticias(),
+      buscarWeb(pregunta)
+    ]);
 
     const contextoFull = `
 NOTICIAS:
@@ -238,17 +318,13 @@ ${noticias}
 
 WEB:
 ${web}
-`;
+    `.trim();
 
     const respuesta = await preguntarGemini(
       `${contextoFull}\n\nPregunta: ${pregunta}`
     );
 
-    ws.send(JSON.stringify({
-      cmd: "chat",
-      text: `@${msg.nick} ${respuesta.slice(0, 200)}`
-    }));
-
+    enviar(msg.nick, cortarRespuesta(respuesta));
     return;
   }
 
@@ -257,13 +333,5 @@ ${web}
     `Usuario: ${msg.nick}\n${contexto}\nPregunta: ${pregunta}`
   );
 
-  ws.send(JSON.stringify({
-    cmd: "chat",
-    text: `@${msg.nick} ${respuesta.slice(0, 200)}`
-  }));
-});
-
-// ================= ERROR =================
-ws.on("error", (err) => {
-  console.log("❌ WebSocket:", err);
-});
+  enviar(msg.nick, cortarRespuesta(respuesta));
+}
