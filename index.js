@@ -10,6 +10,41 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY;
 const memoriaUsuarios = {};
 const cache = {};
 
+// ================= ESTADÍSTICAS DE USO =================
+const stats = {
+  gemini: 0,
+  serper: 0,
+  gnews: 0,
+  mensajes: 0,
+  bloqueados: 0,
+};
+
+setInterval(() => {
+  console.log("📊 Stats:", stats);
+}, 60000); // Log cada minuto
+
+// ================= RATE LIMITING =================
+const rateLimits = {};
+const RATE_LIMIT_MS = 3000; // 3 segundos entre mensajes por usuario
+
+function estaEnCooldown(nick) {
+  const ahora = Date.now();
+  if (rateLimits[nick] && ahora - rateLimits[nick] < RATE_LIMIT_MS) {
+    stats.bloqueados++;
+    return true;
+  }
+  rateLimits[nick] = ahora;
+  return false;
+}
+
+// Limpiar rate limits viejos cada 10 minutos
+setInterval(() => {
+  const ahora = Date.now();
+  for (const nick in rateLimits) {
+    if (ahora - rateLimits[nick] > 60000) delete rateLimits[nick];
+  }
+}, 600000);
+
 // ================= WEBSOCKET CON RECONEXIÓN =================
 let ws;
 
@@ -19,6 +54,16 @@ function conectar() {
   ws.on("open", () => {
     console.log("✅ Conectado a hack.chat");
     ws.send(JSON.stringify({ cmd: "join", channel, nick }));
+
+    // Mensaje de bienvenida con pequeño delay
+    setTimeout(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          cmd: "chat",
+          text: "🤖 CIAC conectado y listo. Menciónme con @CIAC o escribe 'ciac' seguido de tu pregunta."
+        }));
+      }
+    }, 1500);
   });
 
   ws.on("message", manejarMensaje);
@@ -75,10 +120,11 @@ ${pregunta}`
           }
         })
       },
-      8000 // Gemini puede tardar un poco más
+      8000
     );
 
     const data = await response.json();
+    stats.gemini++;
 
     if (data.candidates?.length > 0) {
       return data.candidates[0].content.parts
@@ -116,18 +162,33 @@ function setCache(key, data) {
   cache[key] = { data, time: Date.now() };
 }
 
+// Limpiar cache expirado cada 5 minutos
+setInterval(() => {
+  const ahora = Date.now();
+  for (const key in cache) {
+    if (ahora - cache[key].time > CACHE_TTL) delete cache[key];
+  }
+}, 300000);
+
 // ================= MEMORIA CON LÍMITE =================
 function guardarMemoria(nick, pregunta) {
-  // Limitar cantidad de usuarios en memoria
   const usuarios = Object.keys(memoriaUsuarios);
   if (!memoriaUsuarios[nick] && usuarios.length >= MEMORIA_MAX_USUARIOS) {
-    // Eliminar el usuario más antiguo
     delete memoriaUsuarios[usuarios[0]];
   }
 
   if (!memoriaUsuarios[nick]) memoriaUsuarios[nick] = [];
   memoriaUsuarios[nick].push(pregunta);
   memoriaUsuarios[nick] = memoriaUsuarios[nick].slice(-MEMORIA_MAX_MENSAJES);
+}
+
+// ================= DEDUPLICAR PETICIONES PARALELAS =================
+const pendientes = {};
+
+async function sinDuplicar(key, fn) {
+  if (pendientes[key]) return pendientes[key];
+  pendientes[key] = fn().finally(() => delete pendientes[key]);
+  return pendientes[key];
 }
 
 // ================= APIS =================
@@ -138,69 +199,77 @@ async function obtenerNoticias() {
   const cached = getCache(cacheKey);
   if (cached) return cached;
 
-  try {
-    const res = await fetchConTimeout(
-      `https://gnews.io/api/v4/top-headlines?lang=es&country=co&max=3&apikey=${GNEWS_API_KEY}`
-    );
-    const data = await res.json();
+  return sinDuplicar(cacheKey, async () => {
+    try {
+      const res = await fetchConTimeout(
+        `https://gnews.io/api/v4/top-headlines?lang=es&country=co&max=3&apikey=${GNEWS_API_KEY}`
+      );
+      const data = await res.json();
+      stats.gnews++;
 
-    const noticias = data.articles
-      ?.map(n => `📰 ${n.title}`)
-      .join("\n") || "";
+      const noticias = data.articles
+        ?.map(n => `📰 ${n.title}`)
+        .join("\n") || "";
 
-    setCache(cacheKey, noticias);
-    return noticias;
+      setCache(cacheKey, noticias);
+      return noticias;
 
-  } catch (err) {
-    console.log("❌ Noticias:", err.message);
-    return "";
-  }
+    } catch (err) {
+      console.log("❌ Noticias:", err.message);
+      return "";
+    }
+  });
 }
 
-// 🌐 Búsqueda web (URL corregida)
+// 🌐 Búsqueda web
 async function buscarWeb(query) {
   const cacheKey = "web_" + query;
   const cached = getCache(cacheKey);
   if (cached) return cached;
 
-  try {
-    const res = await fetchConTimeout(
-      "https://google.serper.dev/search", // ✅ URL corregida
-      {
-        method: "POST",
-        headers: {
-          "X-API-KEY": SERPER_API_KEY,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ q: query })
-      }
-    );
+  return sinDuplicar(cacheKey, async () => {
+    try {
+      const res = await fetchConTimeout(
+        "https://google.serper.dev/search",
+        {
+          method: "POST",
+          headers: {
+            "X-API-KEY": SERPER_API_KEY,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ q: query })
+        }
+      );
 
-    const data = await res.json();
+      const data = await res.json();
+      stats.serper++;
 
-    const resultados = data.organic
-      ?.slice(0, 3)
-      .map(r => `🌐 ${r.title}: ${r.snippet || ""}`)
-      .join("\n") || "";
+      const resultados = data.organic
+        ?.slice(0, 3)
+        .map(r => `🌐 ${r.title}: ${r.snippet || ""}`)
+        .join("\n") || "";
 
-    setCache(cacheKey, resultados);
-    return resultados;
+      setCache(cacheKey, resultados);
+      return resultados;
 
-  } catch (err) {
-    console.log("❌ Serper:", err.message);
-    return "";
-  }
+    } catch (err) {
+      console.log("❌ Serper:", err.message);
+      return "";
+    }
+  });
 }
 
 // ================= UTILIDADES =================
 
+const CLAVES_ACTUALES = [
+  "hoy", "actual", "2026", "noticias",
+  "preso", "murió", "pasó", "última",
+  "venezuela", "maduro", "ahora", "reciente",
+  "ayer", "semana", "mes", "precio", "dólar", "tasa"
+];
+
 function esPreguntaActual(texto) {
-  const claves = [
-    "hoy", "actual", "2026", "noticias",
-    "preso", "murió", "pasó", "última",
-    "venezuela", "maduro"
-  ];
-  return claves.some(p => texto.includes(p));
+  return CLAVES_ACTUALES.some(p => texto.includes(p));
 }
 
 function obtenerHora() {
@@ -215,20 +284,20 @@ function obtenerFecha() {
   });
 }
 
-// ✅ Calculadora segura con mathjs (instala con: npm install mathjs)
+// ✅ Calculadora segura con mathjs
 let math;
 try {
   math = require("mathjs");
 } catch {
   math = null;
-  console.warn("⚠️ mathjs no instalado. Cálculos deshabilitados. Ejecuta: npm install mathjs");
+  console.warn("⚠️ mathjs no instalado. Ejecuta: npm install mathjs");
 }
 
 function calcular(expr) {
   if (!math) return null;
   try {
-    // Solo permitir expresiones matemáticas simples
-    if (!/^[0-9+\-*/().\s^%]+$/.test(expr)) return null;
+    // Permitir expresiones matemáticas incluyendo ^ y %
+    if (!/^[\d+\-*/(). ^%\s]+$/.test(expr)) return null;
     const resultado = math.evaluate(expr);
     if (typeof resultado !== "number") return null;
     return resultado;
@@ -245,15 +314,21 @@ function cortarRespuesta(texto, max = 200) {
   return (ultimoEspacio > 0 ? corte.slice(0, ultimoEspacio) : corte) + "…";
 }
 
+// ✅ Sanitizar nick para evitar inyecciones
+function sanitizarNick(nick) {
+  return nick.replace(/[^a-zA-Z0-9_\-]/g, "").slice(0, 30);
+}
+
 // ================= ENVIAR MENSAJE =================
 function enviar(nick, texto) {
   if (ws.readyState !== WebSocket.OPEN) {
     console.log("⚠️ WebSocket no disponible, mensaje descartado");
     return;
   }
+  const nickSeguro = sanitizarNick(nick);
   ws.send(JSON.stringify({
     cmd: "chat",
-    text: `@${nick} ${texto}`
+    text: `@${nickSeguro} ${texto}`
   }));
 }
 
@@ -276,6 +351,13 @@ async function manejarMensaje(data) {
   const pregunta = texto.replace(/ciac/gi, "").trim();
   if (!pregunta) return;
 
+  // 🛡️ Rate limiting
+  if (estaEnCooldown(msg.nick)) {
+    console.log(`⏳ Cooldown activo para ${msg.nick}`);
+    return;
+  }
+
+  stats.mensajes++;
   console.log(`📨 ${msg.nick}: ${pregunta}`);
 
   const lower = pregunta.toLowerCase();
@@ -301,7 +383,7 @@ async function manejarMensaje(data) {
     }
   }
 
-  // 🧠 Memoria
+  // 🧠 Guardar memoria
   guardarMemoria(msg.nick, pregunta);
   const contexto = memoriaUsuarios[msg.nick].join("\n");
 
@@ -313,6 +395,9 @@ async function manejarMensaje(data) {
     ]);
 
     const contextoFull = `
+HISTORIAL DE ${msg.nick}:
+${contexto}
+
 NOTICIAS:
 ${noticias}
 
@@ -328,9 +413,9 @@ ${web}
     return;
   }
 
-  // 🤖 IA normal
+  // 🤖 IA normal con historial del usuario
   const respuesta = await preguntarGemini(
-    `Usuario: ${msg.nick}\n${contexto}\nPregunta: ${pregunta}`
+    `Usuario: ${msg.nick}\nHistorial:\n${contexto}\nPregunta: ${pregunta}`
   );
 
   enviar(msg.nick, cortarRespuesta(respuesta));
